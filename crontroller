@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# Simple utility for running a script and mailing the output on failure
+#
+# The script will mail the failed output using Mandrill; you'll need to set the
+# MANDRILL_API_KEY environment variable to your Mandrill API key.
+# 
+# To set the "To" email address, set the EMAIL_TO environment variable, or call
+# this script with the `-e` flag, e.g. "./crontroller -e cron@example.com"
+#
+# To set the "From" email address, set the EMAIL_FROM environment variable, or call
+# this script with the `-f` flag, e.g. "./crontroller -f cron@example.com"
+# 
+# To set the realm, set the DEPLOYMENT_NAME environment variable.
+
+set -eo pipefail
+
+readonly RETRIES=3
+readonly URL=https://mandrillapp.com/api/1.0/messages/send.json
+
+json() {
+    echo "$1" | python -c 'import json,sys; print json.dumps(sys.stdin.read())'
+}
+
+request() {
+    rm -f curl.output
+    curl --silent --retry "$3" -i -o curl.output -w '%{http_code}' "$2" -d "$1" 
+}
+
+lowercase() {
+    tr '[:upper:]' '[:lower:]'
+}
+
+to() {
+    echo "[{\"email\": \"$1\", \"name\": \"Crontroller $2\", \"type\": \"to\"}]"
+}
+
+# Usage: send_failure <params> exitcode tmpfile email_to email_from
+send_success() {
+    local realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
+    local subject="$realm crontroller: success report"
+    send_notification "$1" "$2" "$3" "$4" "$5" "$subject"
+}
+
+# Usage: send_failure <params> exitcode tmpfile email_to email_from
+send_failure() {
+    local realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
+    local subject="$realm crontroller: command failed"
+    send_notification "$*" "$exitcode" "$tmpfile" "$email_to" "$email_from" "$subject"
+}
+
+# Usage: send_notification command exitcode tempfile email_to email_from subject
+send_notification() {
+    local realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
+    local output=$(cat $3)
+    local to=$(to "$4" $DEPLOYMENT_NAME)
+    local from="$5"
+    local subject="$6"
+    local key="$MANDRILL_API_KEY"
+
+    # XXX, use \n
+    local body="The scheduled command
+    $1
+exited with status code $2. The log output was:
+$output"
+    # XXX messy
+    text=$(json "$body")
+
+    >&2 echo "Sending output logs to $to"
+
+    local payload="{\"key\": \"$key\", \"message\":{\"text\": $text, \"from_email\": \"$from\", \"from_name\": \"Crontroller\", \"subject\": \"$subject\", \"async\": \"false\", \"to\": $to}}"
+
+    http_code=$(request "$payload" "$URL" "$RETRIES")
+
+    if [[ "$http_code" -gt 299 ]]; then 
+        >&2 echo "Email failed to send, this is bad. Bailing."
+        cat curl.output
+    fi
+    if [[ "$DEBUG" == true ]]; then
+        >&2 cat curl.output
+        >&2 echo
+    fi
+}
+
+main() {
+    local usage='crontroller [-e to-email-address] [-f from-address] [-a] [-h] command'
+
+    local email_to="$EMAIL_TO"
+    local email_from="$EMAIL_FROM"
+    local always='false'
+    while getopts ":hae:" option; do
+        case "$option" in 
+            a)
+                always='true'
+                ;;
+            h)
+                echo "$usage" >&2
+                exit
+                ;;
+            e) 
+                email_to="$OPTARG"
+                ;;
+            f) 
+                email_from="$OPTARG"
+                ;;
+            :) 
+                printf "missing argument for -%s\n" "$OPTARG" >&2
+                echo "$usage" >&2
+                exit 1
+                ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    mkdir -p logs
+    local tmpfile=$(mktemp logs/crontroller.XXXXXX)
+    echo "Storing logs in $PWD/$tmpfile" 2>&1 | tee -a $tmpfile 1>&2
+    echo "Running command: \"$@\"" 2>&1 | tee -a $tmpfile 1>&2
+
+    set +e
+    CRONTROLLER=true "$@" 2>&1 | tee -a $tmpfile
+    local exitcode="$?"
+    if [[ "$exitcode" -gt 0 ]]; then
+        send_failure "$*" "$exitcode" "$tmpfile" "$email_to" "$email_from"
+    elif [[ "$always" == 'true' ]]; then
+        send_success "$*" "$exitcode" "$tmpfile" "$email_to" "$email_from"
+    fi
+    set -e
+}
+
+main "$@"
