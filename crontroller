@@ -88,7 +88,7 @@ main() {
     local email_to="$EMAIL_TO"
     local email_from="$EMAIL_FROM"
     local always='false'
-    while getopts ":hae:" option; do
+    while getopts ":haf:e:" option; do
         case "$option" in 
             a)
                 always='true'
