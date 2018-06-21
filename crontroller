@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Simple utility for running a script and mailing the output on failure
+# Utility for running a script and mailing the output on failure
 #
-# The script will mail the failed output using Mandrill; you'll need to set the
-# MANDRILL_API_KEY environment variable to your Mandrill API key.
+# The script will mail the failed output using Sendgrid; you'll need to set the
+# SENDGRID_TOKEN environment variable to your Sendgrid token.
 # 
 # To set the "To" email address, set the EMAIL_TO environment variable, or call
 # this script with the `-e` flag, e.g. "./crontroller -e cron@example.com"
@@ -16,7 +16,7 @@
 set -eo pipefail
 
 readonly RETRIES=3
-readonly URL=https://mandrillapp.com/api/1.0/messages/send.json
+readonly URL=https://api.sendgrid.com/v3/mail/send
 
 json() {
     echo "$1" | python -c 'import json,sys; print json.dumps(sys.stdin.read())'
@@ -24,7 +24,12 @@ json() {
 
 request() {
     rm -f curl.output
-    curl --silent --retry "$3" -i -o curl.output -w '%{http_code}' "$2" -d "$1" 
+    curl --header 'User-Agent: crontroller/0.1' \
+        --header "Authorization: Bearer $4" \
+        --header 'Content-Type: application/json' \
+        --silent --retry "$3" \
+        --include --output curl.output -w '%{http_code}' "$2" \
+        -d "$1" 
 }
 
 lowercase() {
@@ -32,7 +37,7 @@ lowercase() {
 }
 
 to() {
-    echo "[{\"email\": \"$1\", \"name\": \"Crontroller $2\", \"type\": \"to\"}]"
+    echo "[{\"email\": \"$1\", \"name\": \"Crontroller $2\"}]"
 }
 
 # Usage: send_failure <params> exitcode tmpfile email_to email_from
@@ -56,7 +61,7 @@ send_notification() {
     local to=$(to "$4" $DEPLOYMENT_NAME)
     local from="$5"
     local subject="$6"
-    local key="$MANDRILL_API_KEY"
+    local key="$SENDGRID_TOKEN"
 
     # XXX, use \n
     local body="The scheduled command
@@ -68,15 +73,15 @@ $output"
 
     >&2 echo "Sending output logs to $to"
 
-    local payload="{\"key\": \"$key\", \"message\":{\"text\": $text, \"from_email\": \"$from\", \"from_name\": \"Crontroller\", \"subject\": \"$subject\", \"async\": \"false\", \"to\": $to}}"
+    local payload="{\"personalizations\": [{\"to\": $to, \"subject\": \"$subject\"}], \"from\": {\"email\": \"$from\", \"name\": \"Crontroller\"}, \"content\": [{\"type\": \"text/plain\", \"value\": $text}]}"
 
-    http_code=$(request "$payload" "$URL" "$RETRIES")
+    http_code=$(request "$payload" "$URL" "$RETRIES" "${key}")
 
-    if [[ "$http_code" -gt 299 ]]; then 
+    if [[ "${http_code}" -gt 299 ]]; then
         >&2 echo "Email failed to send, this is bad. Bailing."
         cat curl.output
     fi
-    if [[ "$DEBUG" == true ]]; then
+    if [[ "${DEBUG}" == true ]]; then
         >&2 cat curl.output
         >&2 echo
     fi
@@ -111,6 +116,11 @@ main() {
         esac
     done
     shift $((OPTIND - 1))
+
+    if [[ "${email_from}" == '' ]]; then
+        >&2 echo "No EMAIL_FROM or -f argument specified; quitting."
+        exit 2
+    fi
 
     mkdir -p logs
     local tmpfile=$(mktemp logs/crontroller.XXXXXX)
