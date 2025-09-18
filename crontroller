@@ -19,7 +19,16 @@ readonly RETRIES=3
 readonly URL=https://api.sendgrid.com/v3/mail/send
 
 json() {
-    echo "$1" | python -c 'import json,sys; print json.dumps(sys.stdin.read())'
+    local python_cmd
+    if command -v python3 >/dev/null 2>&1; then
+        python_cmd="python3"
+    elif command -v python >/dev/null 2>&1; then
+        python_cmd="python"
+    else
+        >&2 echo "Error: Neither python3 nor python found in PATH"
+        exit 1
+    fi
+    echo "$1" | "$python_cmd" -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
 }
 
 request() {
