@@ -51,23 +51,28 @@ to() {
 
 # Usage: send_failure <params> exitcode tmpfile email_to email_from
 send_success() {
-    local realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
+    local realm
+    realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
     local subject="$realm crontroller: success report"
     send_notification "$1" "$2" "$3" "$4" "$5" "$subject"
 }
 
 # Usage: send_failure <params> exitcode tmpfile email_to email_from
 send_failure() {
-    local realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
+    local realm
+    realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
     local subject="$realm crontroller: command failed"
     send_notification "$*" "$exitcode" "$tmpfile" "$email_to" "$email_from" "$subject"
 }
 
 # Usage: send_notification command exitcode tempfile email_to email_from subject
 send_notification() {
-    local realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
-    local output=$(cat $3)
-    local to=$(to "$4" $DEPLOYMENT_NAME)
+    local realm
+    realm=$(echo "$DEPLOYMENT_NAME" | lowercase )
+    local output
+    output=$(cat "$3")
+    local to
+    to=$(to "$4" "$DEPLOYMENT_NAME")
     local from="$5"
     local subject="$6"
     local key="$SENDGRID_TOKEN"
@@ -117,8 +122,13 @@ main() {
             f) 
                 email_from="$OPTARG"
                 ;;
-            :) 
+            :)
                 printf "missing argument for -%s\n" "$OPTARG" >&2
+                echo "$usage" >&2
+                exit 1
+                ;;
+            *)
+                printf "invalid option: -%s\n" "$OPTARG" >&2
                 echo "$usage" >&2
                 exit 1
                 ;;
@@ -132,12 +142,13 @@ main() {
     fi
 
     mkdir -p logs
-    local tmpfile=$(mktemp logs/crontroller.XXXXXX)
-    echo "Storing logs in $PWD/$tmpfile" 2>&1 | tee -a $tmpfile 1>&2
-    echo "Running command: \"$@\"" 2>&1 | tee -a $tmpfile 1>&2
+    local tmpfile
+    tmpfile=$(mktemp logs/crontroller.XXXXXX)
+    echo "Storing logs in $PWD/$tmpfile" 2>&1 | tee -a "$tmpfile" 1>&2
+    echo "Running command: \"$*\"" 2>&1 | tee -a "$tmpfile" 1>&2
 
     set +e
-    CRONTROLLER=true "$@" 2>&1 | tee -a $tmpfile
+    CRONTROLLER=true "$@" 2>&1 | tee -a "$tmpfile"
     local exitcode="$?"
     if [[ "$exitcode" -gt 0 ]]; then
         send_failure "$*" "$exitcode" "$tmpfile" "$email_to" "$email_from"
